@@ -18,7 +18,6 @@ export class PedidosController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   create(@Body() dto: CreatePedidoDto, @CurrentUser() user: any){ 
-    // Garantir que o pedido será criado para o cliente autenticado
     return this.svc.create({ ...dto, clienteId: user.id }); 
   }
 
@@ -28,7 +27,7 @@ export class PedidosController {
   @ApiOperation({ summary: 'Listar pedidos do cliente autenticado' })
   @ApiQuery({ name: 'status', required: false, description: 'Filtrar por status' })
   findAll(@CurrentUser() user: any, @Query('status') status?: string){ 
-    // Sempre filtrar pelo cliente autenticado
+    
     return this.svc.findAll({ clienteId: user.id, status }); 
   }
 
@@ -37,7 +36,7 @@ export class PedidosController {
   @ApiBearerAuth()
   async findOne(@Param('id') id: string, @CurrentUser() user: any){ 
     const pedido = await this.svc.findOne(id);
-    // Validar ownership
+    
     if (pedido && pedido.cliente?.id !== user.id) {
       throw new Error('Não autorizado a acessar este pedido');
     }
@@ -48,7 +47,7 @@ export class PedidosController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   async addItem(@Param('id') id: string, @Body() body: AddItemPedidoDto, @CurrentUser() user: any){
-    // Validar ownership antes de adicionar item
+    
     const pedido = await this.svc.findOne(id);
     if (pedido && pedido.cliente?.id !== user.id) {
       throw new Error('Não autorizado a modificar este pedido');
@@ -65,7 +64,6 @@ export class PedidosController {
     @Param('itemId') itemId: string,
     @CurrentUser() user: any
   ){
-    // Validar ownership
     const pedido = await this.svc.findOne(pedidoId);
     if (pedido && pedido.cliente?.id !== user.id) {
       throw new Error('Não autorizado a modificar este pedido');
@@ -78,7 +76,7 @@ export class PedidosController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Finalizar pedido com pagamento (valida estoque, debita e marca como pago)' })
   async finalizar(@Param('id') id: string, @Body() dto: FinalizarPedidoDto, @CurrentUser() user: any){
-    // Validar ownership
+    
     const pedido = await this.svc.findOne(id);
     if (pedido && pedido.cliente?.id !== user.id) {
       throw new Error('Não autorizado a finalizar este pedido');
@@ -102,7 +100,7 @@ export class PedidosController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   async remove(@Param('id') id: string, @CurrentUser() user: any){ 
-    // Validar ownership
+    
     const pedido = await this.svc.findOne(id);
     if (pedido && pedido.cliente?.id !== user.id) {
       throw new Error('Não autorizado a remover este pedido');

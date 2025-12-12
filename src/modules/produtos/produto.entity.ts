@@ -18,6 +18,9 @@ export class Produto {
   @Column('int', { default: 0 })
   estoque: number;
 
+  @Column('int', { default: 0 })
+  estoqueReservado: number;
+
   @Column({ nullable: true })
   categoriaId: string;
 

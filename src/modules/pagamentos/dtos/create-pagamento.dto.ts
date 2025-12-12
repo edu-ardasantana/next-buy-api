@@ -10,12 +10,6 @@ export class CreatePagamentoDto {
   @ApiProperty({ enum: MetodoPagamento })
   @IsEnum(MetodoPagamento)
   @IsOptional()
-  metodo?: MetodoPagamento;
-
-  // Aceita ambos para compatibilidade
-  @ApiProperty({ enum: MetodoPagamento })
-  @IsEnum(MetodoPagamento)
-  @IsOptional()
   metodoPagamento?: MetodoPagamento;
 
   @ApiProperty()

@@ -1,21 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, Index, BeforeInsert, BeforeUpdate } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, OneToOne, JoinColumn } from 'typeorm';
 import { Endereco } from '../enderecos/endereco.entity';
-import * as bcrypt from 'bcrypt';
+import { User } from '../auth/user.entity';
 
 @Entity('clientes')
 export class Cliente {
   @PrimaryGeneratedColumn('uuid')
   id: string;
-
-  @Column()
-  nome: string;
-
-  @Index({ unique: true })
-  @Column()
-  email: string;
-
-  @Column()
-  senha: string;
 
   @Column({ nullable: true })
   telefone: string;
@@ -23,16 +13,10 @@ export class Cliente {
   @Column({ type: 'timestamptz', default: () => 'NOW()' })
   createdAt: Date;
 
+  @OneToOne(() => User, user => user.cliente)
+  @JoinColumn()
+  user: User;
+
   @OneToMany(() => Endereco, e => e.cliente)
   enderecos: Endereco[];
-
-  @BeforeInsert()
-  @BeforeUpdate()
-  async hashPassword(){
-    if(this.senha && !this.senha.startsWith('$2b$')){
-      // Só faz hash se a senha ainda não estiver hasheada (bcrypt começa com $2b$)
-      const salt = await bcrypt.genSalt(10);
-      this.senha = await bcrypt.hash(this.senha, salt);
-    }
-  }
 }

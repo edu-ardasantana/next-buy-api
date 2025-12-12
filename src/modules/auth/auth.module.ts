@@ -1,23 +1,30 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { AuthController } from './auth.controller';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
-import { Cliente } from '../clientes/cliente.entity';
+import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { User } from './user.entity';
+import { Cliente } from '../clientes/cliente.entity';
+import type { StringValue } from 'ms';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Cliente]),
+    TypeOrmModule.forFeature([User, Cliente]),
     PassportModule,
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'nextbuy-secret-key-change-in-production',
-      signOptions: { expiresIn: '7d' },
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: async (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET') || '',
+        signOptions: { expiresIn: configService.get<StringValue>('JWT_EXPIRES_IN') },
+      }),
     }),
+    ConfigModule,
   ],
-  controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
-  exports: [AuthService]
+  controllers: [AuthController],
 })
 export class AuthModule {}

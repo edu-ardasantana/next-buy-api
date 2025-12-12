@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { Pagamento, StatusPagamento } from './pagamento.entity';
@@ -7,6 +7,7 @@ import { Produto } from '../produtos/produto.entity';
 import { ItemPedido } from '../pedidos/item-pedido.entity';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { CreatePagamentoDto } from './dtos/create-pagamento.dto';
+import { PedidosService } from '../pedidos/pedidos.service';
 
 @Injectable()
 export class PagamentosService {
@@ -15,6 +16,7 @@ export class PagamentosService {
     @InjectRepository(Pagamento) public repo: Repository<Pagamento>,
     @InjectRepository(Pedido) private pedidoRepo: Repository<Pedido>,
     @InjectDataSource() private dataSource: DataSource,
+    @Inject(forwardRef(() => PedidosService)) private pedidosService: PedidosService,
   ){}
 
   async create(dto: CreatePagamentoDto){
@@ -23,25 +25,34 @@ export class PagamentosService {
 
     if(!pedido) throw new NotFoundException('Pedido não encontrado');
 
-    if(pedido.status !== PedidoStatus.AGUARDANDO_PAGAMENTO && pedido.status !== PedidoStatus.ABERTO){
-      throw new BadRequestException('Pagamento só pode ser criado para pedido aguardando pagamento ou aberto');
+    if(pedido.status !== PedidoStatus.AGUARDANDO_PAGAMENTO && pedido.status !== PedidoStatus.CRIADO){
+      throw new BadRequestException('Pagamento só pode ser criado para pedido CRIADO ou AGUARDANDO_PAGAMENTO');
     }
 
-    const exists = await this.repo.findOne({ where: { pedido: { id: pedido.id }, status: StatusPagamento.PENDENTE } });
+    const exists = await this.repo.findOne({ 
+      where: { 
+        pedido: { id: pedido.id } 
+      } 
+    });
 
-    if(exists) throw new ConflictException('Já existe um pagamento pendente para esse pedido');
-
-    // Aceita tanto 'metodo' quanto 'metodoPagamento' para compatibilidade
-    const metodo = dto.metodoPagamento || dto.metodo;
+    if(exists && exists.status !== StatusPagamento.CANCELADO) {
+      throw new ConflictException('Já existe um pagamento para esse pedido');
+    }
 
     const p = this.repo.create({
-      metodo: metodo,
+      metodo: dto.metodoPagamento,
       valor: dto.valor || pedido.total,
     });
     p.pedido = pedido;
     p.status = StatusPagamento.PENDENTE;
     p.valor = pedido.total;
-    return this.repo.save(p);
+    
+    const saved = await this.repo.save(p);
+    
+    pedido.status = PedidoStatus.AGUARDANDO_PAGAMENTO;
+    await this.pedidoRepo.save(pedido);
+    
+    return saved;
   }
 
   async markPaid(id: string){
@@ -51,49 +62,49 @@ export class PagamentosService {
     
     if(payment.status === StatusPagamento.PAGO) throw new BadRequestException('Pagamento já está pago');
 
-    return await this.dataSource.transaction(async manager => {
+    const pedido = payment.pedido;
 
-      const pedido = await manager.getRepository(Pedido).findOne({ where: { id: payment.pedido.id }, relations: ['itens','itens.produto'] });
+    if(!pedido) throw new NotFoundException('Pedido não encontrado');
 
-      if(!pedido) throw new NotFoundException('Pedido não encontrado');
+    if(pedido.status !== PedidoStatus.AGUARDANDO_PAGAMENTO){
+      throw new BadRequestException('Pedido deve estar AGUARDANDO_PAGAMENTO para confirmar pagamento');
+    }
 
-      for(const item of pedido.itens){
-        if(item.produto.estoque < item.quantidade){
-          throw new BadRequestException(`Estoque insuficiente para produto ${item.produto.nome}`);
-        }
-      }
+    await this.pedidosService.debitarEstoque(pedido.id);
 
-      for(const item of pedido.itens){
-        const prodRepo = manager.getRepository(Produto);
-        const prod = await prodRepo.findOne({ where: { id: item.produto.id } });
-
-        if(!prod) throw new NotFoundException(`Produto não encontrado`);
-        prod.estoque = prod.estoque - item.quantidade;
-        await prodRepo.save(prod);
-      }
-
-      payment.status = StatusPagamento.PAGO;
-      payment.data = new Date();
-      await manager.getRepository(Pagamento).save(payment);
-      pedido.status = PedidoStatus.PAGO;
-      await manager.getRepository(Pedido).save(pedido);
-      return payment;
-    });
+    payment.status = StatusPagamento.PAGO;
+    payment.data = new Date();
+    await this.repo.save(payment);
+    
+    pedido.status = PedidoStatus.PAGO;
+    await this.pedidoRepo.save(pedido);
+    
+    return payment;
   }
 
-  async cancel(id: string){
+  async cancel(id: string, motivoCancelamento?: string){
     const payment = await this.repo.findOne({ where: { id }, relations: ['pedido'] });
 
     if(!payment) throw new NotFoundException('Pagamento não encontrado');
 
     if(payment.status === StatusPagamento.CANCELADO) throw new BadRequestException('Pagamento já cancelado');
+    
+    if(payment.status === StatusPagamento.PAGO) throw new BadRequestException('Não é possível cancelar pagamento já confirmado');
+
+    const pedido = payment.pedido;
+
     payment.status = StatusPagamento.CANCELADO;
+    payment.motivoCancelamento = motivoCancelamento || 'Cancelado pelo usuário';
     await this.repo.save(payment);
 
-    if(payment.pedido && payment.pedido.status === PedidoStatus.AGUARDANDO_PAGAMENTO){
-      payment.pedido.status = PedidoStatus.ABERTO;
-      await this.pedidoRepo.save(payment.pedido);
+    if(pedido && (pedido.status === PedidoStatus.AGUARDANDO_PAGAMENTO || pedido.status === PedidoStatus.CRIADO)){
+      await this.pedidosService.liberarEstoque(pedido.id);
+      
+      pedido.status = PedidoStatus.CANCELADO;
+      pedido.motivoCancelamento = motivoCancelamento || 'Pagamento cancelado';
+      await this.pedidoRepo.save(pedido);
     }
+    
     return payment;
   }
 }

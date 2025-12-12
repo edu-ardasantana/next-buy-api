@@ -11,7 +11,6 @@ export class EnderecosService {
   constructor(@InjectRepository(Endereco) private repo: Repository<Endereco>){ }
 
   async create(dto: CreateEnderecoDto){ 
-    // Se está marcando como padrão, desmarcar todos os outros endereços do cliente
     if (dto.isDefault && dto.clienteId) {
       await this.repo.update(
         { clienteId: dto.clienteId, isDefault: true },
@@ -33,7 +32,6 @@ export class EnderecosService {
     const e = await this.findOne(id);
     if(!e) throw new NotFoundException('Endereço não encontrado');
     
-    // Se está marcando como padrão, desmarcar todos os outros endereços do cliente
     if (dto.isDefault && e.clienteId) {
       await this.repo.update(
         { clienteId: e.clienteId, isDefault: true },

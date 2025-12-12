@@ -1,54 +1,70 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Controller, Post, Body } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { LoginDto } from './dtos/login.dto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Cliente } from '../clientes/cliente.entity';
 
-@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  
-  constructor(private authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    @InjectRepository(Cliente) private readonly clienteRepo: Repository<Cliente>,
+  ) {}
 
   @Post('login')
-  @ApiOperation({ summary: 'Realizar login do cliente' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Login realizado com sucesso',
-    schema: {
-      example: {
-        success: true,
-        message: 'Login realizado com sucesso',
-        cliente: {
-          id: 'uuid',
-          nome: 'Maria Silva',
-          email: 'maria@email.com',
-          telefone: '(11) 99999-9999',
-          createdAt: '2025-11-06T00:00:00.000Z',
-          enderecos: []
-        },
-        timestamp: '2025-11-06T00:00:00.000Z'
-      }
+  async login(@Body() body: { email: string; senha: string }) {
+    const user = await this.authService.validateUser(body.email, body.senha);
+    if (!user) {
+      return { message: 'Invalid credentials' };
     }
-  })
-  @ApiResponse({ 
-    status: 401, 
-    description: 'Email ou senha inválidos' 
-  })
-  async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+    
+    const cliente = await this.clienteRepo.findOne({ 
+      where: { user: { id: user.id } }
+    });
+    
+    const loginResult = await this.authService.login(user);
+    return {
+      token: loginResult.access_token,
+      user: {
+        id: cliente?.id || user.id,
+        userId: user.id,
+        nome: user.nome,
+        email: user.email,
+        role: user.role,
+        telefone: cliente?.telefone
+      }
+    };
   }
 
-  @Get('validate/:email')
-  @ApiOperation({ summary: 'Validar se cliente existe pelo email' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Cliente encontrado' 
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Cliente não encontrado' 
-  })
-  async validateCliente(@Param('email') email: string) {
-    return this.authService.validateCliente(email);
+  @Post('register')
+  async register(@Body() body: { nome: string; senha: string; email: string; telefone?: string }) {
+    const user = await this.authService.register(body.nome, body.senha, body.email, 'CLIENTE');
+    
+    if (!user || !user.id) {
+      throw new Error('Falha ao criar usuário');
+    }
+    
+    const cliente = this.clienteRepo.create({
+      telefone: body.telefone || undefined,
+      user: user,
+    });
+    
+    const savedCliente = await this.clienteRepo.save(cliente);
+    
+    return { 
+      user: {
+        id: savedCliente.id,
+        userId: user.id,
+        nome: user.nome,
+        email: user.email,
+        role: user.role,
+        telefone: savedCliente.telefone
+      }
+    };
+  }
+
+  @Post('register-admin')
+  async registerAdmin(@Body() body: { nome: string; senha: string; email: string }) {
+    return this.authService.register(body.nome, body.senha, body.email, 'ADMIN');
   }
 }

@@ -1,21 +1,13 @@
-import { IsString, IsEmail, MinLength, IsPhoneNumber } from 'class-validator';
+import { IsPhoneNumber, IsUUID, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateClienteDto {
   @ApiProperty()
-  @IsString()
-  nome: string;
+  @IsUUID()
+  userId: string;
 
-  @ApiProperty()
-  @IsEmail()
-  email: string;
-
-  @ApiProperty()
-  @IsString()
-  @MinLength(6)
-  senha: string;
-
-  @ApiProperty()
+  @ApiProperty({ required: false })
+  @IsOptional()
   @IsPhoneNumber('BR')
   telefone: string;
 }

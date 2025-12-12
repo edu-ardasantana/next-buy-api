@@ -29,6 +29,9 @@ export class Pagamento {
   @Column({ type: 'timestamptz', nullable: true })
   data: Date;
 
+  @Column({ type: 'text', nullable: true })
+  motivoCancelamento: string;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

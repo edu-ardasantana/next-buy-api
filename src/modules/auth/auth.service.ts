@@ -1,67 +1,45 @@
-import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Cliente } from '../clientes/cliente.entity';
-import { LoginDto } from './dtos/login.dto';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
+import { User } from './user.entity';
 
 @Injectable()
 export class AuthService {
-  
   constructor(
-    @InjectRepository(Cliente) 
-    private clienteRepo: Repository<Cliente>,
-    private jwtService: JwtService
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    private readonly jwtService: JwtService,
   ) {}
 
-  async login(loginDto: LoginDto) {
-    // Buscar cliente pelo email
-    const cliente = await this.clienteRepo.findOne({
-      where: { email: loginDto.email },
-      relations: ['enderecos']
-    });
+  async validateUser(email: string, pass: string): Promise<any> {
+    const user = await this.userRepository.findOne({ where: { email } });
 
-    if (!cliente) {
-      throw new UnauthorizedException('Email ou senha inválidos');
+    console.log('Validating user:', email, 'Found user:', user);
+
+    if (user && await bcrypt.compare(pass, user.senha)) {
+      const { senha, ...result } = user;
+      return result;
     }
+    return null;
+  }
 
-    // Verificar senha
-    const senhaValida = await bcrypt.compare(loginDto.senha, cliente.senha);
-    
-    if (!senhaValida) {
-      throw new UnauthorizedException('Email ou senha inválidos');
-    }
-
-    // Remover senha do retorno por segurança
-    const { senha, ...clienteSemSenha } = cliente;
-
-    // Gerar token JWT
-    const payload = { email: cliente.email, sub: cliente.id };
-    const token = this.jwtService.sign(payload);
-
+  async login(user: any) {
+    const payload = { email: user.email, nome: user.nome, sub: user.id, role: user.role };
     return {
-      success: true,
-      message: 'Login realizado com sucesso',
-      token,
-      accessToken: token, // Compatibilidade com frontend
-      user: clienteSemSenha,
-      cliente: clienteSemSenha,
-      timestamp: new Date().toISOString()
+      access_token: this.jwtService.sign(payload),
     };
   }
 
-  async validateCliente(email: string) {
-    const cliente = await this.clienteRepo.findOne({
-      where: { email },
-      relations: ['enderecos']
+  async register(nome: string, senha: string, email: string, role: string = 'CLIENTE') {
+    const hashedSenha = await bcrypt.hash(senha, 10);
+    const user = this.userRepository.create({ 
+      nome,
+      email, 
+      senha: hashedSenha, 
+      role 
     });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente não encontrado');
-    }
-
-    const { senha, ...clienteSemSenha } = cliente;
-    return clienteSemSenha;
+    return this.userRepository.save(user);
   }
 }

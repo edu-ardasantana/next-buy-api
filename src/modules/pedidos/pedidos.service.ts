@@ -21,9 +21,49 @@ export class PedidosService {
     private produtosSvc: ProdutosService,
   ){}
 
-  create(dto: CreatePedidoDto){
-    const pedido = this.repo.create(dto);
-    return this.repo.save(pedido);
+  async create(dto: CreatePedidoDto){
+    const pedido = this.repo.create({
+      clienteId: dto.clienteId,
+      status: PedidoStatus.CRIADO,
+    } as any);
+    const saved = await this.repo.save(pedido);
+    return saved;
+  }
+
+
+  async liberarEstoque(pedidoId: string) {
+    const pedido = await this.findOne(pedidoId);
+    
+    if (!pedido) {
+      throw new NotFoundException('Pedido não encontrado');
+    }
+    
+    for (const item of pedido.itens) {
+      const produto = await this.produtoRepo.findOne({ where: { id: item.produto.id } });
+      
+      if (produto && produto.estoqueReservado >= item.quantidade) {
+        produto.estoqueReservado -= item.quantidade;
+        await this.produtoRepo.save(produto);
+      }
+    }
+  }
+
+  async debitarEstoque(pedidoId: string) {
+    const pedido = await this.findOne(pedidoId);
+    
+    if (!pedido) {
+      throw new NotFoundException('Pedido não encontrado');
+    }
+    
+    for (const item of pedido.itens) {
+      const produto = await this.produtoRepo.findOne({ where: { id: item.produto.id } });
+      
+      if (produto) {
+        produto.estoque -= item.quantidade;
+        produto.estoqueReservado -= item.quantidade;
+        await this.produtoRepo.save(produto);
+      }
+    }
   }
 
   findAll(filters?: { clienteId?: string, status?: string }){ 
@@ -54,6 +94,7 @@ export class PedidosService {
     if(!pedido) throw new NotFoundException('Pedido não encontrado');
 
     if(pedido.status === PedidoStatus.PAGO) throw new ConflictException('Pedido já pago e não pode ser alterado');
+    if(pedido.status === PedidoStatus.CANCELADO) throw new ConflictException('Pedido cancelado não pode ser alterado');
 
     const produto = await this.produtosSvc.findOne(produtoId);
 
@@ -61,7 +102,8 @@ export class PedidosService {
 
     if(!produto.ativo) throw new BadRequestException('Produto inativo não pode ser adicionado');
 
-    // Verificar se produto já existe no pedido
+    const estoqueDisponivel = produto.estoque - produto.estoqueReservado;
+
     const itemExistente = await this.itemRepo.findOne({
       where: { 
         pedido: { id: pedidoId },
@@ -70,17 +112,21 @@ export class PedidosService {
     });
 
     if (itemExistente) {
-      // Atualizar quantidade do item existente
-      const novaQuantidade = itemExistente.quantidade + quantidade;
+      const quantidadeAdicional = quantidade;
+      const novaQuantidade = itemExistente.quantidade + quantidadeAdicional;
       
-      if(produto.estoque < novaQuantidade) {
-        throw new BadRequestException(`Estoque insuficiente. Disponível: ${produto.estoque}, Solicitado: ${novaQuantidade}`);
+      if(estoqueDisponivel < quantidadeAdicional) {
+        throw new BadRequestException(`Estoque insuficiente. Disponível: ${estoqueDisponivel}, Solicitado: ${quantidadeAdicional}`);
       }
 
       itemExistente.quantidade = novaQuantidade;
       itemExistente.subtotal = produto.preco * novaQuantidade;
       
       await this.itemRepo.save(itemExistente);
+      
+      produto.estoqueReservado += quantidadeAdicional;
+      await this.produtoRepo.save(produto);
+      
       await this.recalculate(pedidoId);
       
       return {
@@ -88,8 +134,9 @@ export class PedidosService {
         item: itemExistente
       };
     } else {
-      // Criar novo item
-      if(produto.estoque < quantidade) throw new BadRequestException('Estoque insuficiente');
+      if(estoqueDisponivel < quantidade) {
+        throw new BadRequestException(`Estoque insuficiente. Disponível: ${estoqueDisponivel}`);
+      }
 
       const item = this.itemRepo.create({
         pedido,
@@ -100,6 +147,10 @@ export class PedidosService {
       } as any);
       
       await this.itemRepo.save(item);
+      
+      produto.estoqueReservado += quantidade;
+      await this.produtoRepo.save(produto);
+      
       await this.recalculate(pedidoId);
 
       return {
@@ -118,10 +169,23 @@ export class PedidosService {
     const quantidadeTotal = pedido.itens.reduce((s,i)=> s + +i.quantidade, 0);
 
     pedido.subtotal = subtotal;
-    pedido.total = subtotal;
+    pedido.frete = this.calcularFrete(subtotal);
+    pedido.total = subtotal + pedido.frete;
     pedido.quantidadeTotal = quantidadeTotal;
 
     return this.repo.save(pedido);
+  }
+
+  private calcularFrete(subtotal: number): number {
+    if (subtotal >= 200) {
+      return 0;
+    }
+    
+    if (subtotal <= 100) {
+      return 15;
+    }
+    
+    return 10;
   }
 
   async update(id: string, dto: UpdatePedidoDto){
@@ -130,6 +194,7 @@ export class PedidosService {
     if(!p) throw new NotFoundException('Pedido não encontrado');
 
     if(p.status === PedidoStatus.PAGO) throw new ConflictException('Pedido pago não pode ser alterado');
+    if(p.status === PedidoStatus.CANCELADO) throw new ConflictException('Pedido cancelado não pode ser alterado');
 
     Object.assign(p,dto);
 
@@ -144,10 +209,23 @@ export class PedidosService {
     if(pedido.status === PedidoStatus.PAGO) {
       throw new ConflictException('Não é possível remover item de pedido já pago');
     }
+    
+    if(pedido.status === PedidoStatus.CANCELADO) {
+      throw new ConflictException('Não é possível remover item de pedido cancelado');
+    }
 
-    const item = await this.itemRepo.findOne({ where: { id: itemId } });
+    const item = await this.itemRepo.findOne({ 
+      where: { id: itemId },
+      relations: ['produto']
+    });
 
     if(!item) throw new NotFoundException('Item não encontrado');
+    
+    const produto = await this.produtoRepo.findOne({ where: { id: item.produto.id } });
+    if (produto && produto.estoqueReservado >= item.quantidade) {
+      produto.estoqueReservado -= item.quantidade;
+      await this.produtoRepo.save(produto);
+    }
 
     await this.itemRepo.delete(itemId);
     await this.recalculate(pedidoId);
@@ -159,88 +237,17 @@ export class PedidosService {
   }
 
   async remove(id: string){
-    const p = await this.findOne(id);
+    const pedido = await this.findOne(id);
 
-    if(!p) throw new NotFoundException('Pedido não encontrado');
+    if(!pedido) throw new NotFoundException('Pedido não encontrado');
 
-    if(p.status === PedidoStatus.PAGO) throw new ConflictException('Pedido pago não pode ser removido');
+    if(pedido.status === PedidoStatus.PAGO) throw new ConflictException('Pedido pago não pode ser removido');
+    if(pedido.status === PedidoStatus.CANCELADO) throw new ConflictException('Pedido cancelado não pode ser removido');
 
+    await this.liberarEstoque(id);
+    
     await this.repo.delete(id);
     
     return { deleted: true };
-  }
-
-  async finalizarPedido(pedidoId: string, metodoPagamento: string) {
-    return await this.dataSource.transaction(async manager => {
-      // Buscar pedido
-      const pedido = await manager.getRepository(Pedido).findOne({
-        where: { id: pedidoId },
-        relations: ['itens', 'itens.produto', 'cliente']
-      });
-
-      if (!pedido) throw new NotFoundException('Pedido não encontrado');
-
-      if (pedido.status === PedidoStatus.PAGO) {
-        throw new ConflictException('Pedido já está pago');
-      }
-
-      if (!pedido.itens || pedido.itens.length === 0) {
-        throw new BadRequestException('Pedido está vazio');
-      }
-
-      // Buscar pagamento pendente
-      let pagamento = await manager.getRepository(Pagamento).findOne({
-        where: { pedido: { id: pedidoId } }
-      });
-
-      // Verificar estoque
-      for (const item of pedido.itens) {
-        if (item.produto.estoque < item.quantidade) {
-          throw new BadRequestException(`Estoque insuficiente para produto ${item.produto.nome}`);
-        }
-      }
-
-      if (pagamento) {
-        // Atualizar pagamento existente para PAGO
-        pagamento.status = StatusPagamento.PAGO;
-        pagamento.metodo = metodoPagamento as any;
-        pagamento.data = new Date();
-        await manager.getRepository(Pagamento).save(pagamento);
-      } else {
-        // Criar novo pagamento se não existir
-        pagamento = manager.getRepository(Pagamento).create({
-          pedido: pedido,
-          metodo: metodoPagamento as any,
-          status: StatusPagamento.PAGO,
-          valor: pedido.total,
-          data: new Date()
-        });
-        await manager.getRepository(Pagamento).save(pagamento);
-      }
-
-      // Reduzir estoque
-      for (const item of pedido.itens) {
-        const produto = await manager.getRepository(Produto).findOne({ 
-          where: { id: item.produto.id } 
-        });
-        
-        if (produto) {
-          produto.estoque = produto.estoque - item.quantidade;
-          await manager.getRepository(Produto).save(produto);
-        }
-      }
-
-      // Marcar pedido como pago
-      pedido.status = PedidoStatus.PAGO;
-      await manager.getRepository(Pedido).save(pedido);
-
-      return {
-        success: true,
-        message: 'Pedido finalizado com sucesso!',
-        pedido: pedido,
-        pagamento: pagamento,
-        timestamp: new Date().toISOString()
-      };
-    });
   }
 }
